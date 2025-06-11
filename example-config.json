@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "frontend-issue-finder": {
+      "command": "node",
+      "args": ["/Users/eamonboyle/Documents/Code/mcp-frontend-issue-finder/dist/index.js"]
+    }
+  }
+}
