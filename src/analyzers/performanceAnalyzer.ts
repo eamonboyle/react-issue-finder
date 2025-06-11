@@ -37,43 +37,31 @@ export class PerformanceAnalyzer {
 
   private findUnnecessaryReRenders(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
+    let inlineFunctionCount = 0;
+    let inlineStyleCount = 0;
 
     const visit = (node: ts.Node) => {
       if (ts.isJsxAttribute(node) && ts.isIdentifier(node.name)) {
         const attrName = node.name.text;
         
+        // Count inline functions but only flag if many in one component
         if ((attrName === 'onClick' || attrName.startsWith('on')) && 
             node.initializer && 
             ts.isJsxExpression(node.initializer) &&
             node.initializer.expression &&
             ts.isArrowFunction(node.initializer.expression)) {
           
-          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-          issues.push({
-            type: IssueType.PERFORMANCE,
-            severity: IssueSeverity.WARNING,
-            message: 'Inline arrow function in JSX causes unnecessary re-renders',
-            line: position.line + 1,
-            column: position.character + 1,
-            suggestion: 'Extract to useCallback hook or class method'
-          });
+          inlineFunctionCount++;
         }
 
+        // Count inline styles but only flag if many
         if (attrName === 'style' && 
             node.initializer && 
             ts.isJsxExpression(node.initializer) &&
             node.initializer.expression &&
             ts.isObjectLiteralExpression(node.initializer.expression)) {
           
-          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-          issues.push({
-            type: IssueType.PERFORMANCE,
-            severity: IssueSeverity.INFO,
-            message: 'Inline style object causes unnecessary re-renders',
-            line: position.line + 1,
-            column: position.character + 1,
-            suggestion: 'Extract style object outside component or use CSS classes'
-          });
+          inlineStyleCount++;
         }
       }
 
@@ -81,6 +69,31 @@ export class PerformanceAnalyzer {
     };
 
     visit(sourceFile);
+    
+    // Only flag if there are many inline functions (5+) in one file
+    if (inlineFunctionCount > 5) {
+      issues.push({
+        type: IssueType.PERFORMANCE,
+        severity: IssueSeverity.INFO,
+        message: `Many inline arrow functions in JSX (${inlineFunctionCount}) may cause unnecessary re-renders`,
+        line: 1,
+        column: 1,
+        suggestion: 'Consider extracting to useCallback hooks or class methods'
+      });
+    }
+    
+    // Only flag if there are many inline styles (8+) in one file
+    if (inlineStyleCount > 8) {
+      issues.push({
+        type: IssueType.PERFORMANCE,
+        severity: IssueSeverity.INFO,
+        message: `Many inline style objects (${inlineStyleCount}) may cause unnecessary re-renders`,
+        line: 1,
+        column: 1,
+        suggestion: 'Consider extracting style objects or using CSS classes'
+      });
+    }
+
     return issues;
   }
 
@@ -88,32 +101,14 @@ export class PerformanceAnalyzer {
     const issues: Issue[] = [];
 
     const visit = (node: ts.Node) => {
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-        const functionName = node.expression.text;
-        
-        if (functionName === 'map' || functionName === 'filter' || functionName === 'reduce') {
-          const parent = node.parent;
-          if (ts.isJsxExpression(parent)) {
-            const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-            issues.push({
-              type: IssueType.PERFORMANCE,
-              severity: IssueSeverity.INFO,
-              message: `Array.${functionName}() in JSX without memoization`,
-              line: position.line + 1,
-              column: position.character + 1,
-              suggestion: 'Consider using useMemo for expensive calculations'
-            });
-          }
-        }
-      }
-
+      // Only check for very complex calculations without memoization
       if (ts.isFunctionDeclaration(node) || ts.isArrowFunction(node)) {
-        if (this.isComplexCalculation(node) && !this.hasMemoization(node)) {
+        if (this.isVeryComplexCalculation(node) && !this.hasMemoization(node)) {
           const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
           issues.push({
             type: IssueType.PERFORMANCE,
             severity: IssueSeverity.INFO,
-            message: 'Complex calculation without memoization',
+            message: 'Very complex calculation without memoization',
             line: position.line + 1,
             column: position.character + 1,
             suggestion: 'Consider using useMemo or useCallback'
@@ -265,12 +260,13 @@ export class PerformanceAnalyzer {
       const componentText = component.getFullText();
       const jsxElements = this.countJSXElements(component);
 
-      if (jsxElements > 50) {
+      // Only flag extremely large components with many elements (100+)
+      if (jsxElements > 100) {
         const position = sourceFile.getLineAndCharacterOfPosition(component.getStart());
         issues.push({
           type: IssueType.PERFORMANCE,
           severity: IssueSeverity.INFO,
-          message: `Component renders many elements (${jsxElements})`,
+          message: `Component renders very many elements (${jsxElements})`,
           line: position.line + 1,
           column: position.character + 1,
           suggestion: 'Consider virtualization for large lists or break into smaller components'
@@ -283,33 +279,19 @@ export class PerformanceAnalyzer {
 
   private findMemoryLeaks(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
+    let timerCount = 0;
+    let listenerCount = 0;
 
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
         const funcName = node.expression.text;
         
         if (funcName === 'setInterval' || funcName === 'setTimeout') {
-          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-          issues.push({
-            type: IssueType.PERFORMANCE,
-            severity: IssueSeverity.WARNING,
-            message: `${funcName} may cause memory leaks if not cleared`,
-            line: position.line + 1,
-            column: position.character + 1,
-            suggestion: 'Clear timers in useEffect cleanup or componentWillUnmount'
-          });
+          timerCount++;
         }
 
         if (funcName === 'addEventListener') {
-          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-          issues.push({
-            type: IssueType.PERFORMANCE,
-            severity: IssueSeverity.INFO,
-            message: 'Event listener may cause memory leaks if not removed',
-            line: position.line + 1,
-            column: position.character + 1,
-            suggestion: 'Remove event listeners in cleanup functions'
-          });
+          listenerCount++;
         }
       }
 
@@ -317,16 +299,44 @@ export class PerformanceAnalyzer {
     };
 
     visit(sourceFile);
+    
+    // Only flag if there are many timers/listeners in one file (likely problematic)
+    if (timerCount > 3) {
+      issues.push({
+        type: IssueType.PERFORMANCE,
+        severity: IssueSeverity.WARNING,
+        message: `Multiple timers (${timerCount}) may cause memory leaks if not cleared`,
+        line: 1,
+        column: 1,
+        suggestion: 'Ensure all timers are cleared in cleanup functions'
+      });
+    }
+    
+    if (listenerCount > 5) {
+      issues.push({
+        type: IssueType.PERFORMANCE,
+        severity: IssueSeverity.INFO,
+        message: `Multiple event listeners (${listenerCount}) may cause memory leaks`,
+        line: 1,
+        column: 1,
+        suggestion: 'Ensure all event listeners are removed in cleanup functions'
+      });
+    }
+
     return issues;
   }
 
   private findUnoptimizedImages(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
+    let imageCount = 0;
+    let unoptimizedCount = 0;
 
     const visit = (node: ts.Node) => {
       if (ts.isJsxSelfClosingElement(node) && 
           ts.isIdentifier(node.tagName) && 
           node.tagName.text === 'img') {
+        
+        imageCount++;
         
         const hasLoading = node.attributes.properties.some(prop => 
           ts.isJsxAttribute(prop) && 
@@ -335,15 +345,7 @@ export class PerformanceAnalyzer {
         );
 
         if (!hasLoading) {
-          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-          issues.push({
-            type: IssueType.PERFORMANCE,
-            severity: IssueSeverity.INFO,
-            message: 'Image without lazy loading attribute',
-            line: position.line + 1,
-            column: position.character + 1,
-            suggestion: 'Add loading="lazy" for better performance'
-          });
+          unoptimizedCount++;
         }
       }
 
@@ -351,22 +353,35 @@ export class PerformanceAnalyzer {
     };
 
     visit(sourceFile);
+    
+    // Only flag if there are many unoptimized images
+    if (imageCount > 5 && unoptimizedCount > 3) {
+      issues.push({
+        type: IssueType.PERFORMANCE,
+        severity: IssueSeverity.INFO,
+        message: `Multiple images (${unoptimizedCount}/${imageCount}) without lazy loading`,
+        line: 1,
+        column: 1,
+        suggestion: 'Consider adding loading="lazy" for better performance'
+      });
+    }
+    
     return issues;
   }
 
-  private isComplexCalculation(node: ts.Node): boolean {
+  private isVeryComplexCalculation(node: ts.Node): boolean {
     let complexity = 0;
     
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node)) complexity++;
-      if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) complexity += 2;
+      if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) complexity += 3;
       if (ts.isBinaryExpression(node)) complexity++;
       
       ts.forEachChild(node, visit);
     };
 
     visit(node);
-    return complexity > 5;
+    return complexity > 15; // Much higher threshold
   }
 
   private hasMemoization(node: ts.Node): boolean {

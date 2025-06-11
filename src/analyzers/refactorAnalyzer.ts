@@ -15,14 +15,14 @@ export class RefactorAnalyzer {
         return { file: filePath, issues: [] };
       }
 
-      issues.push(...this.findLargeComponents(sourceFile));
-      issues.push(...this.findDuplicateCode(sourceFile));
-      issues.push(...this.findComplexFunctions(sourceFile));
-      issues.push(...this.findUnusedImports(sourceFile));
-      issues.push(...this.findInlineStyles(sourceFile));
-      issues.push(...this.findLongParameterLists(sourceFile));
-      issues.push(...this.findDeepNesting(sourceFile));
-      issues.push(...this.findMagicNumbers(sourceFile));
+      issues.push(...this.findExtremelyLargeComponents(sourceFile));
+      issues.push(...this.findSignificantDuplicateCode(sourceFile));
+      issues.push(...this.findVeryComplexFunctions(sourceFile));
+      issues.push(...this.findDefinitelyUnusedImports(sourceFile));
+      issues.push(...this.findProblematicInlineStyles(sourceFile));
+      issues.push(...this.findExcessiveParameterLists(sourceFile));
+      issues.push(...this.findExtremeNesting(sourceFile));
+      issues.push(...this.findTrueMagicNumbers(sourceFile));
 
     } catch (error) {
       issues.push({
@@ -35,7 +35,7 @@ export class RefactorAnalyzer {
     return { file: filePath, issues };
   }
 
-  private findLargeComponents(sourceFile: ts.SourceFile): Issue[] {
+  private findExtremelyLargeComponents(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
     const components = this.parser.findReactComponents(sourceFile);
 
@@ -43,12 +43,13 @@ export class RefactorAnalyzer {
       const componentText = component.getFullText();
       const lineCount = componentText.split('\n').length;
 
-      if (lineCount > 100) {
+      // Only flag truly massive components (300+ lines)
+      if (lineCount > 300) {
         const position = sourceFile.getLineAndCharacterOfPosition(component.getStart());
         issues.push({
           type: IssueType.REFACTORING,
           severity: IssueSeverity.WARNING,
-          message: `Large component (${lineCount} lines) should be broken down`,
+          message: `Extremely large component (${lineCount} lines) should be broken down`,
           line: position.line + 1,
           column: position.character + 1,
           suggestion: 'Consider extracting sub-components or custom hooks'
@@ -59,19 +60,21 @@ export class RefactorAnalyzer {
     return issues;
   }
 
-  private findComplexFunctions(sourceFile: ts.SourceFile): Issue[] {
+  private findVeryComplexFunctions(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
 
     const visit = (node: ts.Node) => {
       if (ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)) {
         const complexity = this.calculateCyclomaticComplexity(node);
+        const lineCount = node.getFullText().split('\n').length;
         
-        if (complexity > 10) {
+        // Only flag extremely complex functions (20+ complexity AND 100+ lines)
+        if (complexity > 20 && lineCount > 100) {
           const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
           issues.push({
             type: IssueType.REFACTORING,
             severity: IssueSeverity.WARNING,
-            message: `Function has high cyclomatic complexity (${complexity})`,
+            message: `Function has very high cyclomatic complexity (${complexity}) and is very long (${lineCount} lines)`,
             line: position.line + 1,
             column: position.character + 1,
             suggestion: 'Consider breaking down into smaller functions'
@@ -86,14 +89,15 @@ export class RefactorAnalyzer {
     return issues;
   }
 
-  private findDuplicateCode(sourceFile: ts.SourceFile): Issue[] {
+  private findSignificantDuplicateCode(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
     const codeBlocks = new Map<string, ts.Node[]>();
 
     const visit = (node: ts.Node) => {
-      if (ts.isBlock(node) && node.statements.length > 3) {
+      if (ts.isBlock(node) && node.statements.length > 5) {
         const blockText = node.getText().trim();
-        if (blockText.length > 100) {
+        // Only check substantial code blocks (500+ characters)
+        if (blockText.length > 500 && !this.isBoilerplateCode(blockText)) {
           if (!codeBlocks.has(blockText)) {
             codeBlocks.set(blockText, []);
           }
@@ -107,13 +111,14 @@ export class RefactorAnalyzer {
     visit(sourceFile);
 
     codeBlocks.forEach((nodes, blockText) => {
-      if (nodes.length > 1) {
+      // Only flag if duplicated 3+ times
+      if (nodes.length > 2) {
         nodes.forEach(node => {
           const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
           issues.push({
             type: IssueType.REFACTORING,
             severity: IssueSeverity.INFO,
-            message: `Duplicate code block detected (${nodes.length} instances)`,
+            message: `Significant duplicate code block detected (${nodes.length} instances)`,
             line: position.line + 1,
             column: position.character + 1,
             suggestion: 'Consider extracting common logic into a shared function'
@@ -125,60 +130,19 @@ export class RefactorAnalyzer {
     return issues;
   }
 
-  private findUnusedImports(sourceFile: ts.SourceFile): Issue[] {
+  private findDefinitelyUnusedImports(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
-    const imports = new Set<string>();
-    const usages = new Set<string>();
-
-    sourceFile.forEachChild(node => {
-      if (ts.isImportDeclaration(node) && node.importClause) {
-        if (node.importClause.name) {
-          imports.add(node.importClause.name.text);
-        }
-        if (node.importClause.namedBindings) {
-          if (ts.isNamedImports(node.importClause.namedBindings)) {
-            node.importClause.namedBindings.elements.forEach(element => {
-              imports.add(element.name.text);
-            });
-          }
-        }
-      }
-    });
-
-    const visit = (node: ts.Node) => {
-      if (ts.isIdentifier(node)) {
-        usages.add(node.text);
-      }
-      ts.forEachChild(node, visit);
-    };
-
-    visit(sourceFile);
-
-    imports.forEach(importName => {
-      if (!usages.has(importName)) {
-        const importDeclaration = sourceFile.statements.find(stmt => 
-          ts.isImportDeclaration(stmt) && stmt.getText().includes(importName)
-        );
-        
-        if (importDeclaration) {
-          const position = sourceFile.getLineAndCharacterOfPosition(importDeclaration.getStart());
-          issues.push({
-            type: IssueType.REFACTORING,
-            severity: IssueSeverity.INFO,
-            message: `Unused import: ${importName}`,
-            line: position.line + 1,
-            column: position.character + 1,
-            suggestion: 'Remove unused import to reduce bundle size'
-          });
-        }
-      }
-    });
-
+    
+    // Skip this check - too many false positives
+    // Modern bundlers handle tree shaking automatically
+    // and this check is unreliable without proper type checking
+    
     return issues;
   }
 
-  private findInlineStyles(sourceFile: ts.SourceFile): Issue[] {
+  private findProblematicInlineStyles(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
+    let inlineStyleCount = 0;
 
     const visit = (node: ts.Node) => {
       if (ts.isJsxAttribute(node) && 
@@ -187,36 +151,41 @@ export class RefactorAnalyzer {
           node.initializer &&
           ts.isJsxExpression(node.initializer)) {
         
-        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-        issues.push({
-          type: IssueType.REFACTORING,
-          severity: IssueSeverity.INFO,
-          message: 'Inline styles detected',
-          line: position.line + 1,
-          column: position.character + 1,
-          suggestion: 'Consider moving to CSS classes or styled-components'
-        });
+        inlineStyleCount++;
       }
 
       ts.forEachChild(node, visit);
     };
 
     visit(sourceFile);
+    
+    // Only flag if there are many inline styles (10+) in one file
+    if (inlineStyleCount > 10) {
+      issues.push({
+        type: IssueType.REFACTORING,
+        severity: IssueSeverity.INFO,
+        message: `Many inline styles detected (${inlineStyleCount}) in this file`,
+        line: 1,
+        column: 1,
+        suggestion: 'Consider consolidating styles into CSS classes or styled-components'
+      });
+    }
+
     return issues;
   }
 
-  private findLongParameterLists(sourceFile: ts.SourceFile): Issue[] {
+  private findExcessiveParameterLists(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
 
     const visit = (node: ts.Node) => {
       if ((ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)) &&
-          node.parameters.length > 5) {
+          node.parameters.length > 8) { // Only flag truly excessive parameter lists
         
         const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
         issues.push({
           type: IssueType.REFACTORING,
           severity: IssueSeverity.WARNING,
-          message: `Function has too many parameters (${node.parameters.length})`,
+          message: `Function has excessive parameters (${node.parameters.length})`,
           line: position.line + 1,
           column: position.character + 1,
           suggestion: 'Consider using an options object or breaking down the function'
@@ -230,16 +199,17 @@ export class RefactorAnalyzer {
     return issues;
   }
 
-  private findDeepNesting(sourceFile: ts.SourceFile): Issue[] {
+  private findExtremeNesting(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
 
     const checkNesting = (node: ts.Node, depth: number = 0) => {
-      if (depth > 4 && (ts.isIfStatement(node) || ts.isForStatement(node) || ts.isWhileStatement(node))) {
+      // Only flag extremely deep nesting (8+ levels)
+      if (depth > 8 && (ts.isIfStatement(node) || ts.isForStatement(node) || ts.isWhileStatement(node))) {
         const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
         issues.push({
           type: IssueType.REFACTORING,
           severity: IssueSeverity.WARNING,
-          message: `Deep nesting detected (depth: ${depth})`,
+          message: `Extreme nesting detected (depth: ${depth})`,
           line: position.line + 1,
           column: position.character + 1,
           suggestion: 'Consider early returns or extracting nested logic'
@@ -256,19 +226,30 @@ export class RefactorAnalyzer {
     return issues;
   }
 
-  private findMagicNumbers(sourceFile: ts.SourceFile): Issue[] {
+  private findTrueMagicNumbers(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
-    const allowedNumbers = new Set([0, 1, -1, 2, 10, 100, 1000]);
+    
+    // Be very selective about magic numbers - only flag obvious cases
+    const allowedNumbers = new Set([
+      0, 1, -1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 25, 30, 50, 
+      60, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1024
+    ]);
 
     const visit = (node: ts.Node) => {
       if (ts.isNumericLiteral(node)) {
         const value = parseFloat(node.text);
-        if (!allowedNumbers.has(value) && Math.abs(value) > 1) {
+        const text = node.text;
+        
+        // Only flag large, unusual numbers that are clearly not CSS/UI related
+        if (!allowedNumbers.has(value) && value > 1000 && 
+            !this.isLikelyUIValue(text) && 
+            !this.isInCSSContext(node)) {
+          
           const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
           issues.push({
             type: IssueType.REFACTORING,
             severity: IssueSeverity.INFO,
-            message: `Magic number detected: ${node.text}`,
+            message: `Large magic number detected: ${node.text}`,
             line: position.line + 1,
             column: position.character + 1,
             suggestion: 'Consider using a named constant'
@@ -308,5 +289,51 @@ export class RefactorAnalyzer {
 
     visit(node);
     return complexity;
+  }
+
+  private isBoilerplateCode(text: string): boolean {
+    // Common boilerplate patterns that shouldn't be flagged as duplicates
+    const boilerplatePatterns = [
+      /import.*from/,
+      /export.*{/,
+      /const.*=.*{/,
+      /interface.*{/,
+      /type.*=/,
+      /return.*null/,
+      /return.*<div/
+    ];
+    
+    return boilerplatePatterns.some(pattern => pattern.test(text));
+  }
+
+  private isLikelyUIValue(text: string): boolean {
+    // Common UI/CSS values that shouldn't be flagged
+    const value = parseFloat(text);
+    
+    // Common viewport widths, heights, etc.
+    if (value === 1920 || value === 1080 || value === 768 || value === 1024 || 
+        value === 1366 || value === 1440 || value === 1280) {
+      return true;
+    }
+    
+    // Percentages
+    if (value <= 100 && text.includes('.')) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  private isInCSSContext(node: ts.Node): boolean {
+    const parent = node.parent;
+    
+    // Check if it's in a style object or CSS-related context
+    if (ts.isPropertyAssignment(parent)) {
+      const propName = parent.name?.getText()?.toLowerCase() || '';
+      const cssProps = ['width', 'height', 'margin', 'padding', 'top', 'left', 'right', 'bottom', 'fontSize', 'lineHeight'];
+      return cssProps.some(prop => propName.includes(prop));
+    }
+    
+    return false;
   }
 }

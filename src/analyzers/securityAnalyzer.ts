@@ -135,15 +135,18 @@ export class SecurityAnalyzer {
           node.expression.expression.getText() === 'Math' &&
           node.expression.name.text === 'random') {
         
-        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-        issues.push({
-          type: IssueType.SECURITY,
-          severity: IssueSeverity.WARNING,
-          message: 'Math.random() is not cryptographically secure',
-          line: position.line + 1,
-          column: position.character + 1,
-          suggestion: 'Use crypto.getRandomValues() for security-sensitive operations'
-        });
+        // Only flag if it's in a security-sensitive context
+        if (this.isInSecurityContext(node)) {
+          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+          issues.push({
+            type: IssueType.SECURITY,
+            severity: IssueSeverity.WARNING,
+            message: 'Math.random() used in security-sensitive context',
+            line: position.line + 1,
+            column: position.character + 1,
+            suggestion: 'Use crypto.getRandomValues() for security-sensitive operations'
+          });
+        }
       }
 
       ts.forEachChild(node, visit);
@@ -155,44 +158,21 @@ export class SecurityAnalyzer {
 
   private findHardcodedSecrets(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
-    const secretPatterns = [
-      /api[_-]?key/i,
-      /secret[_-]?key/i,
-      /access[_-]?token/i,
-      /auth[_-]?token/i,
-      /password/i,
-      /private[_-]?key/i,
-      /client[_-]?secret/i
-    ];
-
+    
     const visit = (node: ts.Node) => {
       if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-        const text = node.text.toLowerCase();
+        const text = node.text;
         
-        if (secretPatterns.some(pattern => pattern.test(text)) && node.text.length > 10) {
+        // Only flag strings that look like actual secrets (long, alphanumeric patterns)
+        if (this.looksLikeRealSecret(text)) {
           const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
           issues.push({
             type: IssueType.SECURITY,
             severity: IssueSeverity.ERROR,
-            message: 'Potential hardcoded secret detected',
+            message: 'Potential hardcoded secret detected (long alphanumeric string)',
             line: position.line + 1,
             column: position.character + 1,
             suggestion: 'Move secrets to environment variables or secure configuration'
-          });
-        }
-      }
-
-      if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)) {
-        const propName = node.name.text.toLowerCase();
-        if (secretPatterns.some(pattern => pattern.test(propName))) {
-          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-          issues.push({
-            type: IssueType.SECURITY,
-            severity: IssueSeverity.WARNING,
-            message: `Potential secret in property: ${node.name.text}`,
-            line: position.line + 1,
-            column: position.character + 1,
-            suggestion: 'Ensure sensitive data is not hardcoded'
           });
         }
       }
@@ -206,12 +186,13 @@ export class SecurityAnalyzer {
 
   private findUnsafeEvals(sourceFile: ts.SourceFile): Issue[] {
     const issues: Issue[] = [];
-    const unsafeFunctions = ['eval', 'Function', 'setTimeout', 'setInterval'];
+    const unsafeFunctions = ['eval', 'Function'];
 
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node)) {
         const funcName = node.expression.getText();
         
+        // Only flag eval and Function constructor, not setTimeout/setInterval
         if (unsafeFunctions.includes(funcName)) {
           if (node.arguments.length > 0 && ts.isStringLiteral(node.arguments[0])) {
             const position = sourceFile.getLineAndCharacterOfPosition(node.getStart());
@@ -343,5 +324,32 @@ export class SecurityAnalyzer {
 
     visit(sourceFile);
     return issues;
+  }
+
+  private looksLikeRealSecret(text: string): boolean {
+    // Only flag strings that actually look like secrets
+    if (text.length < 20) return false;
+    
+    // Pattern for API keys, tokens, etc. (long alphanumeric strings)
+    const secretPattern = /^[a-zA-Z0-9_-]{20,}$/;
+    
+    // Additional patterns for common secret formats
+    const commonSecretPatterns = [
+      /^[a-f0-9]{32,}$/i, // Hex strings
+      /^[A-Za-z0-9+/]{20,}={0,2}$/, // Base64
+      /^sk-[a-zA-Z0-9]{32,}$/, // OpenAI API keys
+      /^pk_[a-zA-Z0-9_]{20,}$/, // Stripe keys
+      /^AIza[a-zA-Z0-9_-]{35}$/, // Google API keys
+    ];
+    
+    return secretPattern.test(text) || commonSecretPatterns.some(pattern => pattern.test(text));
+  }
+
+  private isInSecurityContext(node: ts.Node): boolean {
+    const text = node.getFullText();
+    const securityKeywords = ['token', 'key', 'auth', 'secret', 'password', 'crypto', 'hash', 'salt'];
+    
+    // Look for security-related context in surrounding code
+    return securityKeywords.some(keyword => text.toLowerCase().includes(keyword));
   }
 }

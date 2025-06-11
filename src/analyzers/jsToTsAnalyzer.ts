@@ -20,18 +20,16 @@ export class JSToTSAnalyzer {
       }
 
       const migrationScore = this.calculateMigrationScore(sourceFile);
-      const suggestions = this.generateMigrationSuggestions(sourceFile, filePath);
 
-      if (migrationScore > 3) {
+      // Only suggest migration for files that clearly would benefit (higher threshold)
+      if (migrationScore > 6) {
         issues.push({
           type: IssueType.JS_TO_TS,
           severity: IssueSeverity.INFO,
-          message: `This JavaScript file should be migrated to TypeScript (score: ${migrationScore}/10)`,
+          message: `This JavaScript file would significantly benefit from TypeScript migration (score: ${migrationScore}/10)`,
           suggestion: this.generateMigrationPlan(sourceFile, filePath)
         });
       }
-
-      issues.push(...suggestions);
 
     } catch (error) {
       issues.push({
